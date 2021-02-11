@@ -8,7 +8,8 @@ import {
   isJSRequest,
   prettifyUrl,
   removeImportQuery,
-  removeTimestampQuery
+  removeTimestampQuery,
+  unwrapId
 } from '../../utils'
 import { send } from '../send'
 import { transformRequest } from '../transformRequest'
@@ -18,8 +19,7 @@ import {
   CLIENT_PUBLIC_PATH,
   DEP_CACHE_DIR,
   DEP_VERSION_RE,
-  NULL_BYTE_PLACEHOLDER,
-  VALID_ID_PREFIX
+  NULL_BYTE_PLACEHOLDER
 } from '../../constants'
 import { isCSSRequest, isDirectCSSRequest } from '../../plugins/css'
 
@@ -56,10 +56,25 @@ export function transformMiddleware(
       return
     }
 
-    let url = decodeURI(removeTimestampQuery(req.url!)).replace(
-      NULL_BYTE_PLACEHOLDER,
-      '\0'
-    )
+    let url
+    try {
+      url = decodeURI(removeTimestampQuery(req.url!)).replace(
+        NULL_BYTE_PLACEHOLDER,
+        '\0'
+      )
+    } catch (err) {
+      // if it starts with %PUBLIC%, someone's migrating from something
+      // like create-react-app
+      let errorMessage
+      if (req.url?.startsWith('/%PUBLIC')) {
+        errorMessage = `index.html shouldn't include environment variables like %PUBLIC_URL%, see https://vitejs.dev/guide/#index-html-and-project-root for more information`
+      } else {
+        errorMessage = `Vite encountered a suspiciously malformed request ${req.url}`
+      }
+      next(new Error(errorMessage))
+      return
+    }
+
     const withoutQuery = cleanUrl(url)
 
     try {
@@ -96,12 +111,9 @@ export function transformMiddleware(
       ) {
         // strip ?import
         url = removeImportQuery(url)
-
         // Strip valid id prefix. This is preprended to resolved Ids that are
         // not valid browser import specifiers by the importAnalysis plugin.
-        if (url.startsWith(VALID_ID_PREFIX)) {
-          url = url.slice(VALID_ID_PREFIX.length)
-        }
+        url = unwrapId(url)
 
         // for CSS, we need to differentiate between normal CSS requests and
         // imports
